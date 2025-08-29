@@ -2,6 +2,7 @@ from rest_framework import serializers
 from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
 from .models import UserProfile  # If you have a profile model
+from .models import Plan
 
 class LoginSerializer(serializers.Serializer):
     username = serializers.CharField(max_length=150)
@@ -49,3 +50,9 @@ class AdminDashboardSerializer(serializers.Serializer):
     active_users = serializers.IntegerField()
     admin_users = serializers.IntegerField()
     recent_users = UserSerializer(many=True)
+
+class PlanSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Plan
+        fields = ['id', 'file', 'upload_date', 'uploaded_by', 'uploader_name', 'status', 'reviewed_by']
+        read_only_fields = ['id', 'upload_date', 'uploaded_by', 'uploader_name', 'status', 'reviewed_by']

@@ -153,3 +153,14 @@ class UserSession(models.Model):
         verbose_name = "User Session"
         verbose_name_plural = "User Sessions"
         ordering = ['-last_activity']
+
+class Plan(models.Model):
+    file = models.FileField(upload_to='plans/')
+    upload_date = models.DateTimeField(auto_now_add=True)
+    uploaded_by = models.ForeignKey(User, on_delete=models.CASCADE)
+    uploader_name = models.CharField(max_length=255)
+    status = models.CharField(max_length=32, default='pending', choices=[('pending', 'Pending'), ('reviewed', 'Reviewed')])
+    reviewed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='reviewed_plans')
+
+    def __str__(self):
+        return f"{self.file.name} uploaded by {self.uploader_name}"

@@ -145,8 +145,8 @@ REST_FRAMEWORK = {
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000", # React frontend
     "http://127.0.0.1:3000",
-    "http://localhost:5173",  # Vite default port
-    "http://127.0.0.1:5173",
+    "http://localhost:2809",  # Vite default port
+    "http://127.0.0.1:2809",
 ]
 
 CORS_ALLOW_CREDENTIALS = True

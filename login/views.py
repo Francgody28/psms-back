@@ -6,7 +6,9 @@ from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.models import User
-from .serializers import LoginSerializer, UserRegistrationSerializer, UserSerializer, AdminDashboardSerializer
+from .serializers import LoginSerializer, UserRegistrationSerializer, UserSerializer, AdminDashboardSerializer, PlanSerializer
+from .models import Plan
+from rest_framework.parsers import MultiPartParser, FormParser
 from django.db.models import Q
 
 @api_view(['POST'])
@@ -102,25 +104,19 @@ def user_dashboard(request):
             'error': 'Access denied. This is for regular users only.'
         }, status=status.HTTP_403_FORBIDDEN)
     
-    user_data = {
-        'user_info': {
-            'id': request.user.id,
-            'username': request.user.username,
-            'email': request.user.email,
-            'first_name': request.user.first_name,
-            'last_name': request.user.last_name,
-            'date_joined': request.user.date_joined,
-        },
-        'dashboard_type': 'user',
-        'available_features': [
-            'View Profile',
-            'Update Profile',
-            'View History',
-            'Settings'
-        ]
+    user = request.user
+    user_info = {
+        'id': user.id,
+        'username': user.username,
+        'email': user.email,
+        'role': getattr(getattr(user, 'profile', None), 'role', '')  # ensure role is returned
     }
-    
-    return Response(user_data, status=status.HTTP_200_OK)
+    return Response({'user_info': user_info, 'dashboard_type': 'user', 'available_features': [
+        'View Profile',
+        'Update Profile',
+        'View History',
+        'Settings'
+    ]}, status=status.HTTP_200_OK)
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -140,12 +136,11 @@ def admin_dashboard(request):
             'id': user.id,
             'username': user.username,
             'email': user.email,
-            'first_name': user.first_name,
-            'last_name': user.last_name,
             'is_active': user.is_active,
             'is_admin': user.is_staff or user.is_superuser,
             'date_joined': user.date_joined,
-            'last_login': user.last_login
+            'last_login': user.last_login,
+            'role': getattr(getattr(user, 'profile', None), 'role', '')
         })
     
     admin_data = {
@@ -332,3 +327,50 @@ def update_profile(request):
             'user': serializer.data
         }, status=status.HTTP_200_OK)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def upload_plan(request):
+    """Endpoint for planning officer to upload a plan document"""
+    parser_classes = (MultiPartParser, FormParser)
+    file = request.FILES.get('file')
+    if not file:
+        return Response({'error': 'No file provided'}, status=status.HTTP_400_BAD_REQUEST)
+    uploader_name = f"{request.user.first_name} {request.user.last_name}".strip() or request.user.username
+    plan = Plan.objects.create(
+        file=file,
+        uploaded_by=request.user,
+        uploader_name=uploader_name,
+        status='pending',  # Ensure status is always set to pending on upload
+        reviewed_by=None   # Ensure reviewed_by is cleared on upload
+    )
+    serializer = PlanSerializer(plan)
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def pending_plans_for_head(request):
+    """List all pending plans for head of division"""
+    user = request.user
+    # Only allow head_of_division to access
+    if not hasattr(user, 'profile') or user.profile.role != 'head_of_division':
+        return Response({'error': 'Access denied.'}, status=status.HTTP_403_FORBIDDEN)
+    plans = Plan.objects.filter(status='pending')
+    serializer = PlanSerializer(plans, many=True)
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def review_plan(request, plan_id):
+    """Head of division reviews a plan"""
+    user = request.user
+    if not hasattr(user, 'profile') or user.profile.role != 'head_of_division':
+        return Response({'error': 'Access denied.'}, status=status.HTTP_403_FORBIDDEN)
+    try:
+        plan = Plan.objects.get(id=plan_id)
+        plan.status = 'reviewed'
+        plan.reviewed_by = user
+        plan.save()
+        return Response({'message': 'Plan reviewed successfully.'}, status=status.HTTP_200_OK)
+    except Plan.DoesNotExist:
+        return Response({'error': 'Plan not found.'}, status=status.HTTP_404_NOT_FOUND)
