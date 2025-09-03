@@ -3,6 +3,7 @@ from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
 from .models import UserProfile  # If you have a profile model
 from .models import Plan
+from .models import Statistic  # new
 
 class LoginSerializer(serializers.Serializer):
     username = serializers.CharField(max_length=150)
@@ -54,5 +55,11 @@ class AdminDashboardSerializer(serializers.Serializer):
 class PlanSerializer(serializers.ModelSerializer):
     class Meta:
         model = Plan
+        fields = ['id', 'file', 'upload_date', 'uploaded_by', 'uploader_name', 'status', 'reviewed_by']
+        read_only_fields = ['id', 'upload_date', 'uploaded_by', 'uploader_name', 'status', 'reviewed_by']
+
+class StatisticSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Statistic
         fields = ['id', 'file', 'upload_date', 'uploaded_by', 'uploader_name', 'status', 'reviewed_by']
         read_only_fields = ['id', 'upload_date', 'uploaded_by', 'uploader_name', 'status', 'reviewed_by']

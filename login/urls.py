@@ -26,5 +26,11 @@ urlpatterns = [
     path('upload-plan/', views.upload_plan, name='upload_plan'),
     path('review-plan/<int:plan_id>/', views.review_plan, name='review_plan'),
     path('pending-plans/', views.pending_plans_for_head, name='pending_plans'),
+
+    # Statistics upload and review endpoints
+    path('my-statistics/', views.my_statistics, name='my_statistics'),
+    path('upload-statistic/', views.upload_statistic, name='upload_statistic'),
+    path('review-statistic/<int:stat_id>/', views.review_statistic, name='review_statistic'),
+    path('pending-statistics/', views.pending_statistics_for_head, name='pending_statistics'),
 ]
 

@@ -10,6 +10,8 @@ from .serializers import LoginSerializer, UserRegistrationSerializer, UserSerial
 from .models import Plan
 from rest_framework.parsers import MultiPartParser, FormParser
 from django.db.models import Q
+from .models import Statistic
+from .serializers import StatisticSerializer
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -533,3 +535,117 @@ def my_plans(request):
         traceback.print_exc()
         return Response({'error': f'Internal server error: {str(e)}'}, 
                        status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def upload_statistic(request):
+    """Endpoint for statistics officer to upload a statistic document (Word/Excel)"""
+    try:
+        user = request.user
+        # roles allowed to upload statistics
+        user_role = getattr(getattr(user, 'profile', None), 'role', '')
+        allowed_roles = ['statistics_officer', 'head_of_division', 'head_of_department']
+        if not (user.is_staff or user.is_superuser or user_role in allowed_roles):
+            return Response({'error': f'Access denied. Only statistics officers and heads can upload statistics. Your role: {user_role}'},
+                            status=status.HTTP_403_FORBIDDEN)
+
+        file = request.FILES.get('file')
+        if not file:
+            return Response({'error': 'No file provided'}, status=status.HTTP_400_BAD_REQUEST)
+
+        uploader_name = f"{user.first_name} {user.last_name}".strip() or user.username
+
+        stat = Statistic.objects.create(
+            file=file,
+            uploaded_by=user,
+            uploader_name=uploader_name,
+            status='pending',
+            reviewed_by=None
+        )
+        serializer = StatisticSerializer(stat)
+        return Response({'message': 'Statistic uploaded successfully', 'statistic': serializer.data}, status=status.HTTP_201_CREATED)
+    except Exception as e:
+        return Response({'error': f'Upload error: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def pending_statistics_for_head(request):
+    """List statistics for heads:
+       - head_of_division: status='pending'
+       - head_of_department: status='reviewed'
+       - admins: default to pending
+    """
+    user = request.user
+    user_role = getattr(getattr(user, 'profile', None), 'role', '')
+    allowed_roles = ['head_of_division', 'head_of_department']
+    if not (user.is_staff or user.is_superuser or user_role in allowed_roles):
+        return Response({'error': 'Access denied. Only heads can view pending statistics.'}, status=status.HTTP_403_FORBIDDEN)
+
+    if user_role == 'head_of_department':
+        stats = Statistic.objects.filter(status='reviewed')
+    else:
+        stats = Statistic.objects.filter(status='pending')
+
+    serializer = StatisticSerializer(stats, many=True)
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def review_statistic(request, stat_id):
+    """Heads review a statistic:
+       - head_of_division: approve => 'reviewed', reject => 'rejected'
+       - head_of_department: approve => 'approved', reject => 'rejected'
+    """
+    user = request.user
+    user_role = getattr(getattr(user, 'profile', None), 'role', '')
+    allowed_roles = ['head_of_division', 'head_of_department']
+    if not (user.is_staff or user.is_superuser or user_role in allowed_roles):
+        return Response({'error': 'Access denied. Only heads can review statistics.'}, status=status.HTTP_403_FORBIDDEN)
+
+    try:
+        stat = Statistic.objects.get(id=stat_id)
+        action = request.data.get('action', 'approve').strip().lower()
+
+        if action == 'reject':
+            stat.status = 'rejected'
+        else:
+            if user_role == 'head_of_division' and not (user.is_staff or user.is_superuser):
+                stat.status = 'reviewed'
+            else:
+                stat.status = 'approved'
+        stat.reviewed_by = user
+        stat.save()
+
+        return Response({'message': f"Statistic {stat.status} successfully.", 'status': stat.status}, status=status.HTTP_200_OK)
+    except Statistic.DoesNotExist:
+        return Response({'error': 'Statistic not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def my_statistics(request):
+    """Return all statistics uploaded by the current user"""
+    try:
+        user = request.user
+        user_role = getattr(getattr(user, 'profile', None), 'role', '')
+        allowed_roles = ['statistics_officer', 'head_of_division', 'head_of_department']
+        if not (user.is_staff or user.is_superuser or user_role in allowed_roles or user_role == ''):
+            return Response({'error': f'Access denied. Only statistics-related roles can view statistics. Your role: {user_role}'},
+                            status=status.HTTP_403_FORBIDDEN)
+
+        stats = Statistic.objects.filter(uploaded_by=user).order_by('-upload_date')
+        data = []
+        for s in stats:
+            file_name = s.file.name if s.file else ''
+            upload_date = s.upload_date.isoformat() if s.upload_date else ''
+            data.append({
+                'id': s.id,
+                'file': file_name,
+                'status': s.status,
+                'uploaded_at': upload_date,
+                'created_at': upload_date,
+                'uploader_name': s.uploader_name,
+                'reviewed_by': s.reviewed_by.username if s.reviewed_by else None
+            })
+        return Response(data, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({'error': f'Internal server error: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
