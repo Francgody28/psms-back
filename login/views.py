@@ -404,9 +404,12 @@ def upload_plan(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def pending_plans_for_head(request):
-    """List all pending plans for head of division and head of department"""
+    """List plans for heads:
+       - head_of_division: plans with status='pending'
+       - head_of_department: plans with status='reviewed' (approved by division, awaiting department)
+       - admins: default to pending
+    """
     user = request.user
-    # Only allow head_of_division and head_of_department to access
     allowed_roles = ['head_of_division', 'head_of_department']
     user_role = getattr(getattr(user, 'profile', None), 'role', '')
     
@@ -414,14 +417,22 @@ def pending_plans_for_head(request):
         return Response({'error': 'Access denied. Only heads can view pending plans.'}, 
                        status=status.HTTP_403_FORBIDDEN)
     
-    plans = Plan.objects.filter(status='pending')
+    # Role-based queue
+    if user_role == 'head_of_department':
+        plans = Plan.objects.filter(status='reviewed')
+    else:
+        plans = Plan.objects.filter(status='pending')
+    
     serializer = PlanSerializer(plans, many=True)
     return Response(serializer.data, status=status.HTTP_200_OK)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def review_plan(request, plan_id):
-    """Head of division and head of department reviews a plan"""
+    """Heads review a plan:
+       - head_of_division: approve => 'reviewed', reject => 'rejected'
+       - head_of_department: approve => 'approved', reject => 'rejected'
+    """
     user = request.user
     allowed_roles = ['head_of_division', 'head_of_department']
     user_role = getattr(getattr(user, 'profile', None), 'role', '')
@@ -432,20 +443,22 @@ def review_plan(request, plan_id):
     
     try:
         plan = Plan.objects.get(id=plan_id)
-        
-        # Get action from request data (approve or reject)
-        action = request.data.get('action', 'approve')  # Default to approve
+        action = request.data.get('action', 'approve').strip().lower()
         
         if action == 'reject':
             plan.status = 'rejected'
         else:
-            plan.status = 'reviewed'  # Approved
+            # Approve flow depends on role
+            if user_role == 'head_of_division' and not (user.is_staff or user.is_superuser):
+                plan.status = 'reviewed'  # approved by HoDivision, send to HoDepartment queue
+            else:
+                # head_of_department or admins finalize approval
+                plan.status = 'approved'
         
         plan.reviewed_by = user
         plan.save()
         
-        action_text = 'rejected' if action == 'reject' else 'approved'
-        return Response({'message': f'Plan {action_text} successfully.'}, status=status.HTTP_200_OK)
+        return Response({'message': f"Plan {plan.status} successfully.", 'status': plan.status}, status=status.HTTP_200_OK)
         
     except Plan.DoesNotExist:
         return Response({'error': 'Plan not found.'}, status=status.HTTP_404_NOT_FOUND)
