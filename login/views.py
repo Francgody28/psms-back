@@ -14,7 +14,7 @@ from django.db.models import Q
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def user_login(request):
-    """Login endpoint for both admin and regular users"""
+    """Login endpoint with role-based dashboard routing"""
     serializer = LoginSerializer(data=request.data)
     if serializer.is_valid():
         username = serializer.validated_data['username']
@@ -27,7 +27,23 @@ def user_login(request):
             login(request, user)
             token, created = Token.objects.get_or_create(user=user)
             
-            # Determine user role and redirect accordingly
+            # Get user role from profile
+            user_role = getattr(getattr(user, 'profile', None), 'role', '')
+            
+            # Determine dashboard URL based on role
+            dashboard_url = '/dashboard'  # default
+            if user.is_staff or user.is_superuser:
+                dashboard_url = '/admin-dashboard'
+                user_role = 'admin'
+            elif user_role == 'head_of_division':
+                dashboard_url = '/head-of-division-dashboard'
+            elif user_role == 'head_of_department':
+                dashboard_url = '/head-of-department-dashboard'
+            elif user_role == 'planning_officer':
+                dashboard_url = '/planning-dashboard'
+            elif user_role == 'statistics_officer':
+                dashboard_url = '/statistics-dashboard'
+            
             user_data = {
                 'id': user.id,
                 'username': user.username,
@@ -36,14 +52,15 @@ def user_login(request):
                 'last_name': user.last_name,
                 'is_admin': user.is_staff or user.is_superuser,
                 'is_active': user.is_active,
-                'date_joined': user.date_joined
+                'date_joined': user.date_joined,
+                'role': user_role
             }
             
             return Response({
                 'message': 'Login successful',
                 'token': token.key,
                 'user': user_data,
-                'dashboard_url': '/admin-dashboard' if user.is_staff or user.is_superuser else '/user-dashboard'
+                'dashboard_url': dashboard_url
             }, status=status.HTTP_200_OK)
         else:
             return Response({
@@ -332,29 +349,71 @@ def update_profile(request):
 @permission_classes([IsAuthenticated])
 def upload_plan(request):
     """Endpoint for planning officer to upload a plan document"""
-    parser_classes = (MultiPartParser, FormParser)
-    file = request.FILES.get('file')
-    if not file:
-        return Response({'error': 'No file provided'}, status=status.HTTP_400_BAD_REQUEST)
-    uploader_name = f"{request.user.first_name} {request.user.last_name}".strip() or request.user.username
-    plan = Plan.objects.create(
-        file=file,
-        uploaded_by=request.user,
-        uploader_name=uploader_name,
-        status='pending',  # Ensure status is always set to pending on upload
-        reviewed_by=None   # Ensure reviewed_by is cleared on upload
-    )
-    serializer = PlanSerializer(plan)
-    return Response(serializer.data, status=status.HTTP_201_CREATED)
+    try:
+        user = request.user
+        print(f"Upload request from user: {user.username}")  # Debug log
+        
+        # Get user role safely
+        user_role = ''
+        try:
+            if hasattr(user, 'profile') and user.profile:
+                user_role = getattr(user.profile, 'role', '')
+        except Exception as profile_error:
+            print(f"Profile error: {str(profile_error)}")
+            user_role = ''
+        
+        print(f"User role: '{user_role}'")  # Debug log
+        
+        # Allow upload for admins, superusers, and specific roles
+        allowed_roles = ['planning_officer', 'head_of_division', 'head_of_department']
+        
+        if not (user.is_staff or user.is_superuser or user_role in allowed_roles):
+            print(f"Access denied for user {user.username} with role '{user_role}'")
+            return Response({'error': f'Access denied. Only planning officers and heads can upload plans. Your role: {user_role}'}, 
+                           status=status.HTTP_403_FORBIDDEN)
+        
+        file = request.FILES.get('file')
+        if not file:
+            return Response({'error': 'No file provided'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        uploader_name = f"{user.first_name} {user.last_name}".strip() or user.username
+        
+        plan = Plan.objects.create(
+            file=file,
+            uploaded_by=user,
+            uploader_name=uploader_name,
+            status='pending',
+            reviewed_by=None
+        )
+        
+        print(f"Plan created with ID: {plan.id}")  # Debug log
+        
+        serializer = PlanSerializer(plan)
+        return Response({
+            'message': 'Plan uploaded successfully',
+            'plan': serializer.data
+        }, status=status.HTTP_201_CREATED)
+        
+    except Exception as e:
+        print(f"Error in upload_plan: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return Response({'error': f'Upload error: {str(e)}'}, 
+                       status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def pending_plans_for_head(request):
-    """List all pending plans for head of division"""
+    """List all pending plans for head of division and head of department"""
     user = request.user
-    # Only allow head_of_division to access
-    if not hasattr(user, 'profile') or user.profile.role != 'head_of_division':
-        return Response({'error': 'Access denied.'}, status=status.HTTP_403_FORBIDDEN)
+    # Only allow head_of_division and head_of_department to access
+    allowed_roles = ['head_of_division', 'head_of_department']
+    user_role = getattr(getattr(user, 'profile', None), 'role', '')
+    
+    if not (user.is_staff or user.is_superuser or user_role in allowed_roles):
+        return Response({'error': 'Access denied. Only heads can view pending plans.'}, 
+                       status=status.HTTP_403_FORBIDDEN)
+    
     plans = Plan.objects.filter(status='pending')
     serializer = PlanSerializer(plans, many=True)
     return Response(serializer.data, status=status.HTTP_200_OK)
@@ -362,15 +421,102 @@ def pending_plans_for_head(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def review_plan(request, plan_id):
-    """Head of division reviews a plan"""
+    """Head of division and head of department reviews a plan"""
     user = request.user
-    if not hasattr(user, 'profile') or user.profile.role != 'head_of_division':
-        return Response({'error': 'Access denied.'}, status=status.HTTP_403_FORBIDDEN)
+    allowed_roles = ['head_of_division', 'head_of_department']
+    user_role = getattr(getattr(user, 'profile', None), 'role', '')
+    
+    if not (user.is_staff or user.is_superuser or user_role in allowed_roles):
+        return Response({'error': 'Access denied. Only heads can review plans.'}, 
+                       status=status.HTTP_403_FORBIDDEN)
+    
     try:
         plan = Plan.objects.get(id=plan_id)
-        plan.status = 'reviewed'
+        
+        # Get action from request data (approve or reject)
+        action = request.data.get('action', 'approve')  # Default to approve
+        
+        if action == 'reject':
+            plan.status = 'rejected'
+        else:
+            plan.status = 'reviewed'  # Approved
+        
         plan.reviewed_by = user
         plan.save()
-        return Response({'message': 'Plan reviewed successfully.'}, status=status.HTTP_200_OK)
+        
+        action_text = 'rejected' if action == 'reject' else 'approved'
+        return Response({'message': f'Plan {action_text} successfully.'}, status=status.HTTP_200_OK)
+        
     except Plan.DoesNotExist:
         return Response({'error': 'Plan not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def my_plans(request):
+    """Return all plans uploaded by the current user (for recent activity)"""
+    try:
+        user = request.user
+        print(f"User {user.username} requesting my_plans")  # Debug log
+        
+        # Get user role safely
+        user_role = ''
+        try:
+            if hasattr(user, 'profile') and user.profile:
+                user_role = getattr(user.profile, 'role', '')
+        except Exception as profile_error:
+            print(f"Profile error in my_plans: {str(profile_error)}")
+            user_role = ''
+        
+        print(f"User role: '{user_role}'")  # Debug log
+        
+        # Allow admins and users with planning-related roles, or if no role is set (for testing)
+        allowed_roles = ['planning_officer', 'head_of_division', 'head_of_department']
+        
+        # For now, allow users without roles (for testing purposes)
+        if not (user.is_staff or user.is_superuser or user_role in allowed_roles or user_role == ''):
+            print(f"Access denied for user {user.username} with role '{user_role}'")
+            return Response({'error': f'Access denied. Only planning-related roles can view plans. Your role: {user_role}'}, 
+                           status=status.HTTP_403_FORBIDDEN)
+        
+        plans = Plan.objects.filter(uploaded_by=user).order_by('-upload_date')  # Changed from created_at to upload_date
+        print(f"Found {plans.count()} plans for user {user.username}")  # Debug log
+        
+        plans_data = []
+        
+        for plan in plans:
+            try:
+                # Safely get file name
+                file_name = ''
+                if plan.file:
+                    file_name = plan.file.name
+                
+                # Safely get upload_date
+                upload_date = ''
+                if hasattr(plan, 'upload_date') and plan.upload_date:
+                    upload_date = plan.upload_date.isoformat()
+                
+                plan_data = {
+                    'id': plan.id,
+                    'file': file_name,
+                    'status': getattr(plan, 'status', 'pending'),
+                    'created_at': upload_date,  # Changed from created_at to upload_date
+                    'uploaded_at': upload_date,  # Changed from created_at to upload_date
+                    'uploader_name': getattr(plan, 'uploader_name', user.username),
+                    'reviewed_by': plan.reviewed_by.username if plan.reviewed_by else None
+                }
+                plans_data.append(plan_data)
+                print(f"Plan data: {plan_data}")  # Debug log
+                
+            except Exception as plan_error:
+                print(f"Error processing plan {plan.id}: {str(plan_error)}")
+                continue
+        
+        print(f"Returning {len(plans_data)} plans")  # Debug log
+        return Response(plans_data, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        print(f"Error in my_plans: {str(e)}")  # Debug log
+        import traceback
+        traceback.print_exc()
+        return Response({'error': f'Internal server error: {str(e)}'}, 
+                       status=status.HTTP_500_INTERNAL_SERVER_ERROR)

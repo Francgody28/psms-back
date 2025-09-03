@@ -1,6 +1,5 @@
 from django.urls import path
 from . import views
-from .views import upload_plan, pending_plans_for_head, review_plan
 
 urlpatterns = [
     # Authentication endpoints
@@ -22,8 +21,10 @@ urlpatterns = [
     path('profile/', views.get_profile, name='get_profile'),
     path('profile/update/', views.update_profile, name='update_profile'),
 
-    # Plan upload endpoint
-    path('upload-plan/', upload_plan, name='upload-plan'),
-    path('pending-plans/', pending_plans_for_head, name='pending-plans'),
-    path('review-plan/<int:plan_id>/', review_plan, name='review-plan'),
+    # Plan upload and review endpoints
+    path('my-plans/', views.my_plans, name='my_plans'),
+    path('upload-plan/', views.upload_plan, name='upload_plan'),
+    path('review-plan/<int:plan_id>/', views.review_plan, name='review_plan'),
+    path('pending-plans/', views.pending_plans_for_head, name='pending_plans'),
 ]
+
