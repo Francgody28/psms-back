@@ -45,6 +45,8 @@ def user_login(request):
                 dashboard_url = '/planning-dashboard'
             elif user_role == 'statistics_officer':
                 dashboard_url = '/statistics-dashboard'
+            elif user_role == 'director_general':
+                dashboard_url = '/director-general-dashboard'  # added
             
             user_data = {
                 'id': user.id,
@@ -412,7 +414,7 @@ def pending_plans_for_head(request):
        - admins: default to pending
     """
     user = request.user
-    allowed_roles = ['head_of_division', 'head_of_department']
+    allowed_roles = ['head_of_division', 'head_of_department', 'director_general']  # include DG
     user_role = getattr(getattr(user, 'profile', None), 'role', '')
     
     if not (user.is_staff or user.is_superuser or user_role in allowed_roles):
@@ -421,8 +423,13 @@ def pending_plans_for_head(request):
     
     # Role-based queue
     if user_role == 'head_of_department':
-        plans = Plan.objects.filter(status='reviewed')
+        # items approved by HoDivision (reviewed) awaiting HoDepartment
+        plans = Plan.objects.filter(status='reviewed', reviewed_by__profile__role='head_of_division')
+    elif user_role == 'director_general' or user.is_staff or user.is_superuser:
+        # items approved by HoDepartment (still reviewed) awaiting DG
+        plans = Plan.objects.filter(status='reviewed', reviewed_by__profile__role='head_of_department')
     else:
+        # head_of_division
         plans = Plan.objects.filter(status='pending')
     
     serializer = PlanSerializer(plans, many=True)
@@ -436,7 +443,7 @@ def review_plan(request, plan_id):
        - head_of_department: approve => 'approved', reject => 'rejected'
     """
     user = request.user
-    allowed_roles = ['head_of_division', 'head_of_department']
+    allowed_roles = ['head_of_division', 'head_of_department', 'director_general']  # include DG
     user_role = getattr(getattr(user, 'profile', None), 'role', '')
     
     if not (user.is_staff or user.is_superuser or user_role in allowed_roles):
@@ -450,11 +457,12 @@ def review_plan(request, plan_id):
         if action == 'reject':
             plan.status = 'rejected'
         else:
-            # Approve flow depends on role
             if user_role == 'head_of_division' and not (user.is_staff or user.is_superuser):
-                plan.status = 'reviewed'  # approved by HoDivision, send to HoDepartment queue
+                plan.status = 'reviewed'  # stays reviewed, next HoDepartment
+            elif user_role == 'head_of_department' and not (user.is_staff or user.is_superuser):
+                plan.status = 'reviewed'  # stays reviewed, next DG
             else:
-                # head_of_department or admins finalize approval
+                # DG or admins finalize approval
                 plan.status = 'approved'
         
         plan.reviewed_by = user
@@ -570,19 +578,17 @@ def upload_statistic(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def pending_statistics_for_head(request):
-    """List statistics for heads:
-       - head_of_division: status='pending'
-       - head_of_department: status='reviewed'
-       - admins: default to pending
-    """
+    """List statistics for heads and DG based on role"""
     user = request.user
     user_role = getattr(getattr(user, 'profile', None), 'role', '')
-    allowed_roles = ['head_of_division', 'head_of_department']
+    allowed_roles = ['head_of_division', 'head_of_department', 'director_general']
     if not (user.is_staff or user.is_superuser or user_role in allowed_roles):
-        return Response({'error': 'Access denied. Only heads can view pending statistics.'}, status=status.HTTP_403_FORBIDDEN)
+        return Response({'error': 'Access denied. Only heads and DG can view pending statistics.'}, status=status.HTTP_403_FORBIDDEN)
 
     if user_role == 'head_of_department':
-        stats = Statistic.objects.filter(status='reviewed')
+        stats = Statistic.objects.filter(status='reviewed', reviewed_by__profile__role='head_of_division')
+    elif user_role == 'director_general' or user.is_staff or user.is_superuser:
+        stats = Statistic.objects.filter(status='reviewed', reviewed_by__profile__role='head_of_department')
     else:
         stats = Statistic.objects.filter(status='pending')
 
@@ -594,13 +600,14 @@ def pending_statistics_for_head(request):
 def review_statistic(request, stat_id):
     """Heads review a statistic:
        - head_of_division: approve => 'reviewed', reject => 'rejected'
-       - head_of_department: approve => 'approved', reject => 'rejected'
+       - head_of_department: approve => 'reviewed' (forward to DG), reject => 'rejected'
+       - director_general/admin: approve => 'approved', reject => 'rejected'
     """
     user = request.user
     user_role = getattr(getattr(user, 'profile', None), 'role', '')
-    allowed_roles = ['head_of_division', 'head_of_department']
+    allowed_roles = ['head_of_division', 'head_of_department', 'director_general']  # include DG
     if not (user.is_staff or user.is_superuser or user_role in allowed_roles):
-        return Response({'error': 'Access denied. Only heads can review statistics.'}, status=status.HTTP_403_FORBIDDEN)
+        return Response({'error': 'Access denied. Only heads/DG can review statistics.'}, status=status.HTTP_403_FORBIDDEN)
 
     try:
         stat = Statistic.objects.get(id=stat_id)
@@ -610,9 +617,11 @@ def review_statistic(request, stat_id):
             stat.status = 'rejected'
         else:
             if user_role == 'head_of_division' and not (user.is_staff or user.is_superuser):
-                stat.status = 'reviewed'
+                stat.status = 'reviewed'  # to HoDepartment
+            elif user_role == 'head_of_department' and not (user.is_staff or user.is_superuser):
+                stat.status = 'reviewed'  # to Director General
             else:
-                stat.status = 'approved'
+                stat.status = 'approved'  # DG or admins
         stat.reviewed_by = user
         stat.save()
 
@@ -625,27 +634,28 @@ def review_statistic(request, stat_id):
 def my_statistics(request):
     """Return all statistics uploaded by the current user"""
     try:
-        user = request.user
-        user_role = getattr(getattr(user, 'profile', None), 'role', '')
-        allowed_roles = ['statistics_officer', 'head_of_division', 'head_of_department']
-        if not (user.is_staff or user.is_superuser or user_role in allowed_roles or user_role == ''):
-            return Response({'error': f'Access denied. Only statistics-related roles can view statistics. Your role: {user_role}'},
-                            status=status.HTTP_403_FORBIDDEN)
+      user = request.user
+      user_role = getattr(getattr(user, 'profile', None), 'role', '')
+      allowed_roles = ['statistics_officer', 'head_of_division', 'head_of_department']
+      # Allow admins and optionally users without a role (for testing)
+      if not (user.is_staff or user.is_superuser or user_role in allowed_roles or user_role == ''):
+          return Response({'error': f'Access denied. Only statistics-related roles can view statistics. Your role: {user_role}'},
+                          status=status.HTTP_403_FORBIDDEN)
 
-        stats = Statistic.objects.filter(uploaded_by=user).order_by('-upload_date')
-        data = []
-        for s in stats:
-            file_name = s.file.name if s.file else ''
-            upload_date = s.upload_date.isoformat() if s.upload_date else ''
-            data.append({
-                'id': s.id,
-                'file': file_name,
-                'status': s.status,
-                'uploaded_at': upload_date,
-                'created_at': upload_date,
-                'uploader_name': s.uploader_name,
-                'reviewed_by': s.reviewed_by.username if s.reviewed_by else None
-            })
-        return Response(data, status=status.HTTP_200_OK)
+      stats = Statistic.objects.filter(uploaded_by=user).order_by('-upload_date')
+      data = []
+      for s in stats:
+          file_name = s.file.name if s.file else ''
+          upload_date = s.upload_date.isoformat() if s.upload_date else ''
+          data.append({
+              'id': s.id,
+              'file': file_name,
+              'status': s.status,
+              'uploaded_at': upload_date,
+              'created_at': upload_date,
+              'uploader_name': s.uploader_name,
+              'reviewed_by': s.reviewed_by.username if s.reviewed_by else None
+          })
+      return Response(data, status=status.HTTP_200_OK)
     except Exception as e:
-        return Response({'error': f'Internal server error: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+      return Response({'error': f'Internal server error: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

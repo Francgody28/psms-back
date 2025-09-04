@@ -9,6 +9,7 @@ class UserProfile(models.Model):
         ('statistics_officer', 'Statistics Officer'),
         ('head_of_division', 'Head of Division'),
         ('head_of_department', 'Head of Department'),
+        ('director_general', 'Director General'),  # added
     ]
     
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
