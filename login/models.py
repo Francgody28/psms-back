@@ -186,3 +186,34 @@ class Statistic(models.Model):
 
     def __str__(self):
         return f"{self.file.name} uploaded by {self.uploader_name}"
+
+# NEW: Budget models
+class Budget(models.Model):
+    received_budget = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    used_budget = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    projection = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='updated_budgets')
+
+    def __str__(self):
+        return f"Budget (Received: {self.received_budget}, Used: {self.used_budget}, Projection: {self.projection})"
+
+    class Meta:
+        verbose_name = 'Budget'
+        verbose_name_plural = 'Budgets'
+
+class BudgetHistory(models.Model):
+    budget = models.ForeignKey(Budget, on_delete=models.CASCADE, related_name='history')
+    field_name = models.CharField(max_length=32)
+    old_value = models.DecimalField(max_digits=18, decimal_places=2)
+    new_value = models.DecimalField(max_digits=18, decimal_places=2)
+    changed_at = models.DateTimeField(auto_now_add=True)
+    changed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.field_name}: {self.old_value} -> {self.new_value} at {self.changed_at}"
+
+    class Meta:
+        verbose_name = 'Budget History'
+        verbose_name_plural = 'Budget History'
+        ordering = ['-changed_at']

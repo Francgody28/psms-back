@@ -12,6 +12,8 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from django.db.models import Q
 from .models import Statistic
 from .serializers import StatisticSerializer
+from .models import Budget, BudgetHistory
+from decimal import Decimal
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -659,3 +661,138 @@ def my_statistics(request):
       return Response(data, status=status.HTTP_200_OK)
     except Exception as e:
       return Response({'error': f'Internal server error: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def approved_plans(request):
+    """Return all approved plans (visible to heads and DG/admin)."""
+    user = request.user
+    user_role = getattr(getattr(user, 'profile', None), 'role', '')
+    if not (user.is_staff or user.is_superuser or user_role in ['head_of_division','head_of_department','director_general']):
+        return Response({'error':'Access denied.'}, status=status.HTTP_403_FORBIDDEN)
+    plans = Plan.objects.filter(status='approved').order_by('-upload_date')
+    data = []
+    for p in plans:
+        data.append({
+            'id': p.id,
+            'file': p.file.name if p.file else '',
+            'status': p.status,
+            'uploaded_at': p.upload_date.isoformat() if p.upload_date else '',
+            'uploader_name': p.uploader_name,
+            'reviewed_by': p.reviewed_by.username if p.reviewed_by else None
+        })
+    return Response(data, status=status.HTTP_200_OK)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def approved_statistics(request):
+    """Return all approved statistics (visible to heads and DG/admin)."""
+    user = request.user
+    user_role = getattr(getattr(user, 'profile', None), 'role', '')
+    if not (user.is_staff or user.is_superuser or user_role in ['head_of_division','head_of_department','director_general']):
+        return Response({'error':'Access denied.'}, status=status.HTTP_403_FORBIDDEN)
+    stats = Statistic.objects.filter(status='approved').order_by('-upload_date')
+    data = []
+    for s in stats:
+        data.append({
+            'id': s.id,
+            'file': s.file.name if s.file else '',
+            'status': s.status,
+            'uploaded_at': s.upload_date.isoformat() if s.upload_date else '',
+            'uploader_name': s.uploader_name,
+            'reviewed_by': s.reviewed_by.username if s.reviewed_by else None
+        })
+    return Response(data, status=status.HTTP_200_OK)
+
+@api_view(['GET','PUT'])
+@permission_classes([IsAuthenticated])
+def budget_view(request):
+    """Get or update current budget (single row approach)."""
+    # single budget row (create if missing)
+    budget, _ = Budget.objects.get_or_create(id=1)
+    if request.method == 'GET':
+        return Response({
+            'received_budget': str(budget.received_budget),
+            'used_budget': str(budget.used_budget),
+            'projection': str(budget.projection),
+            'updated_at': budget.updated_at,
+            'updated_by': budget.updated_by.username if budget.updated_by else None
+        }, status=status.HTTP_200_OK)
+    # PUT: only heads, DG or admin can update
+    user = request.user
+    role = getattr(getattr(user,'profile',None),'role','')
+    if not (user.is_staff or user.is_superuser or role in ['head_of_division','head_of_department','director_general']):
+        return Response({'error':'Permission denied.'}, status=status.HTTP_403_FORBIDDEN)
+    fields = ['received_budget','used_budget','projection']
+    changed = []
+    for f in fields:
+        if f in request.data:
+            try:
+                new_val = Decimal(str(request.data.get(f)))
+            except Exception:
+                return Response({'error':f'Invalid value for {f}'}, status=status.HTTP_400_BAD_REQUEST)
+            old_val = getattr(budget,f)
+            if new_val != old_val:
+                BudgetHistory.objects.create(budget=budget, field_name=f, old_value=old_val, new_value=new_val, changed_by=user)
+                setattr(budget,f,new_val)
+                changed.append(f)
+    if changed:
+        budget.updated_by = user
+        budget.save()
+    return Response({'message':'Budget updated','changed_fields':changed,'budget':{
+        'received_budget': str(budget.received_budget),
+        'used_budget': str(budget.used_budget),
+        'projection': str(budget.projection),
+        'updated_at': budget.updated_at,
+        'updated_by': budget.updated_by.username if budget.updated_by else None
+    }}, status=status.HTTP_200_OK)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def budget_history(request):
+    """Return budget change history (latest first)."""
+    user = request.user
+    role = getattr(getattr(user,'profile',None),'role','')
+    if not (user.is_staff or user.is_superuser or role in ['head_of_division','head_of_department','director_general']):
+        return Response({'error':'Permission denied.'}, status=status.HTTP_403_FORBIDDEN)
+    history = BudgetHistory.objects.select_related('changed_by').order_by('-changed_at')[:200]
+    data = []
+    for h in history:
+        data.append({
+            'field_name': h.field_name,
+            'old_value': str(h.old_value),
+            'new_value': str(h.new_value),
+            'changed_at': h.changed_at,
+            'changed_by': h.changed_by.username if h.changed_by else None
+        })
+    return Response(data, status=status.HTTP_200_OK)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def hod_processed_plans(request):
+    """Plans already processed by Head of Department (reviewed forwarded to DG, and rejected)."""
+    user = request.user
+    role = getattr(getattr(user, 'profile', None), 'role', '')
+    if not (user.is_staff or user.is_superuser or role == 'head_of_department'):
+        return Response({'error': 'Access denied.'}, status=status.HTTP_403_FORBIDDEN)
+
+    reviewed = Plan.objects.filter(status='reviewed', reviewed_by__profile__role='head_of_department').order_by('-upload_date')
+    rejected = Plan.objects.filter(status='rejected', reviewed_by=user).order_by('-upload_date')
+
+    def serialize(plans_qs):
+        out = []
+        for p in plans_qs:
+            out.append({
+                'id': p.id,
+                'file': p.file.name if p.file else '',
+                'status': p.status,
+                'uploaded_at': p.upload_date.isoformat() if p.upload_date else '',
+                'uploader_name': p.uploader_name,
+                'reviewed_by': p.reviewed_by.username if p.reviewed_by else None
+            })
+        return out
+
+    return Response({
+        'reviewed_plans': serialize(reviewed),
+        'rejected_plans': serialize(rejected)
+    }, status=status.HTTP_200_OK)
