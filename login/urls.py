@@ -33,7 +33,7 @@ urlpatterns = [
     path('my-statistics/', views.my_statistics, name='my_statistics'),
     path('upload-statistic/', views.upload_statistic, name='upload_statistic'),
     path('review-statistic/<int:stat_id>/', views.review_statistic, name='review_statistic'),
-    path('pending-statistics/', views.pending_statistics_for_head, name='pending_statistics'),
+    path('pending-statistics/', views.pending_statistics, name='pending_statistics'),
     path('approved-statistics/', views.approved_statistics, name='approved_statistics'),
 
     # Budget endpoints

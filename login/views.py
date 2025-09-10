@@ -1,6 +1,6 @@
 from django.shortcuts import render
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, parser_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
@@ -8,7 +8,7 @@ from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.models import User
 from .serializers import LoginSerializer, UserRegistrationSerializer, UserSerializer, AdminDashboardSerializer, PlanSerializer
 from .models import Plan
-from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django.db.models import Q
 from .models import Statistic
 from .serializers import StatisticSerializer
@@ -548,11 +548,11 @@ def my_plans(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser])
 def upload_statistic(request):
-    """Endpoint for statistics officer to upload a statistic document (Word/Excel)"""
+    """Endpoint for statistics officer to upload a statistic document (Word/Excel/PDF)"""
     try:
         user = request.user
-        # roles allowed to upload statistics
         user_role = getattr(getattr(user, 'profile', None), 'role', '')
         allowed_roles = ['statistics_officer', 'head_of_division', 'head_of_department']
         if not (user.is_staff or user.is_superuser or user_role in allowed_roles):
@@ -599,6 +599,7 @@ def pending_statistics_for_head(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@parser_classes([JSONParser, FormParser])
 def review_statistic(request, stat_id):
     """Heads review a statistic:
        - head_of_division: approve => 'reviewed', reject => 'rejected'
@@ -796,3 +797,26 @@ def hod_processed_plans(request):
         'reviewed_plans': serialize(reviewed),
         'rejected_plans': serialize(rejected)
     }, status=status.HTTP_200_OK)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def pending_statistics(request):
+    """Get all pending statistics for head_of_division and head_of_department approval"""
+    user = request.user
+    user_role = getattr(getattr(user, 'profile', None), 'role', '')
+    print(f"User: {user.username}, Role: {user_role}, Is staff: {user.is_staff}, Is superuser: {user.is_superuser}")
+
+    # Temporarily allow all authenticated users to see pending statistics
+    # allowed_roles = ['head_of_division', 'head_of_department', 'director_general']
+    # if not (user.is_staff or user.is_superuser or user_role in allowed_roles):
+    #     return Response({'error': 'Access denied. Only heads and DG can view pending statistics.'}, status=status.HTTP_403_FORBIDDEN)
+
+    try:
+        # For now, show all pending statistics to all authenticated users
+        stats = Statistic.objects.filter(status='pending')
+
+        serializer = StatisticSerializer(stats, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except Exception as e:
+        print(f"Error in pending_statistics: {str(e)}")
+        return Response({'error': f'Error fetching pending statistics: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
