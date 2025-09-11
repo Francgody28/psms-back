@@ -53,13 +53,24 @@ class AdminDashboardSerializer(serializers.Serializer):
     recent_users = UserSerializer(many=True)
 
 class PlanSerializer(serializers.ModelSerializer):
+    approved_by_hod_username = serializers.CharField(source='approved_by_hod.username', read_only=True, required=False)
+    approved_by_hod_dept_username = serializers.CharField(source='approved_by_hod_dept.username', read_only=True, required=False)
+    approved_by_dg_username = serializers.CharField(source='approved_by_dg.username', read_only=True, required=False)
+    
     class Meta:
         model = Plan
-        fields = ['id', 'file', 'upload_date', 'uploaded_by', 'uploader_name', 'status', 'reviewed_by']
+        fields = ['id', 'file', 'uploaded_by', 'uploader_name', 'status', 'reviewed_by', 'upload_date', 
+                  'approved_by_hod', 'approved_at_hod', 'approved_by_hod_dept', 'approved_at_hod_dept', 
+                  'approved_by_dg', 'approved_at_dg', 'approved_by_hod_username', 'approved_by_hod_dept_username', 'approved_by_dg_username']
         read_only_fields = ['id', 'upload_date', 'uploaded_by', 'uploader_name', 'status', 'reviewed_by']
 
 class StatisticSerializer(serializers.ModelSerializer):
+    approved_by_hod_username = serializers.CharField(source='approved_by_hod.username', read_only=True, required=False)
+    approved_by_hod_dept_username = serializers.CharField(source='approved_by_hod_dept.username', read_only=True, required=False)
+    approved_by_dg_username = serializers.CharField(source='approved_by_dg.username', read_only=True, required=False)
     class Meta:
         model = Statistic
-        fields = ['id', 'file', 'upload_date', 'uploaded_by', 'uploader_name', 'status', 'reviewed_by']
+        fields = ['id', 'file', 'uploaded_by', 'uploader_name', 'status', 'reviewed_by', 'upload_date', 
+                  'approved_by_hod', 'approved_at_hod', 'approved_by_hod_dept', 'approved_at_hod_dept', 
+                  'approved_by_dg', 'approved_at_dg', 'approved_by_hod_username', 'approved_by_hod_dept_username', 'approved_by_dg_username']
         read_only_fields = ['id', 'upload_date', 'uploaded_by', 'uploader_name', 'status', 'reviewed_by']

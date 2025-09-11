@@ -28,6 +28,7 @@ urlpatterns = [
     path('pending-plans/', views.pending_plans_for_head, name='pending_plans'),
     path('approved-plans/', views.approved_plans, name='approved_plans'),
     path('hod-processed-plans/', views.hod_processed_plans, name='hod_processed_plans'),
+    path('download-plan/<int:plan_id>/', views.download_plan, name='download_plan'),
 
     # Statistics upload and review endpoints
     path('my-statistics/', views.my_statistics, name='my_statistics'),
@@ -35,6 +36,7 @@ urlpatterns = [
     path('review-statistic/<int:stat_id>/', views.review_statistic, name='review_statistic'),
     path('pending-statistics/', views.pending_statistics, name='pending_statistics'),
     path('approved-statistics/', views.approved_statistics, name='approved_statistics'),
+    path('download-statistic/<int:stat_id>/', views.download_statistic, name='download_statistic'),
 
     # Budget endpoints
     path('budget/', views.budget_view, name='budget_view'),

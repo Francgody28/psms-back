@@ -156,36 +156,55 @@ class UserSession(models.Model):
         ordering = ['-last_activity']
 
 class Plan(models.Model):
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('reviewed', 'Reviewed'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
     file = models.FileField(upload_to='plans/')
+    uploaded_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='uploaded_plans')
+    uploader_name = models.CharField(max_length=255, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    reviewed_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     upload_date = models.DateTimeField(auto_now_add=True)
-    uploaded_by = models.ForeignKey(User, on_delete=models.CASCADE)
-    uploader_name = models.CharField(max_length=255)
-    # include full lifecycle
-    status = models.CharField(
-        max_length=32,
-        default='pending',
-        choices=[('pending', 'Pending'), ('reviewed', 'Reviewed'), ('approved', 'Approved'), ('rejected', 'Rejected')]
-    )
-    reviewed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='reviewed_plans')
-
+    
+    # New approval tracking fields
+    approved_by_hod = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='hod_approved_plans')
+    approved_at_hod = models.DateTimeField(null=True, blank=True)
+    approved_by_hod_dept = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='hod_dept_approved_plans')
+    approved_at_hod_dept = models.DateTimeField(null=True, blank=True)
+    approved_by_dg = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='dg_approved_plans')
+    approved_at_dg = models.DateTimeField(null=True, blank=True)
+    
     def __str__(self):
-        return f"{self.file.name} uploaded by {self.uploader_name}"
+        return f"Plan by {self.uploaded_by.username} - {self.status}"
 
 # New: statistics uploads with same lifecycle as plans
 class Statistic(models.Model):
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('reviewed', 'Reviewed'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
     file = models.FileField(upload_to='statistics/')
+    uploaded_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='uploaded_statistics')
+    uploader_name = models.CharField(max_length=255, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    reviewed_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     upload_date = models.DateTimeField(auto_now_add=True)
-    uploaded_by = models.ForeignKey(User, on_delete=models.CASCADE)
-    uploader_name = models.CharField(max_length=255)
-    status = models.CharField(
-        max_length=32,
-        default='pending',
-        choices=[('pending', 'Pending'), ('reviewed', 'Reviewed'), ('approved', 'Approved'), ('rejected', 'Rejected')]
-    )
-    reviewed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='reviewed_statistics')
-
+    
+    # New approval tracking fields
+    approved_by_hod = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='hod_approved_statistics')
+    approved_at_hod = models.DateTimeField(null=True, blank=True)
+    approved_by_hod_dept = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='hod_dept_approved_statistics')
+    approved_at_hod_dept = models.DateTimeField(null=True, blank=True)
+    approved_by_dg = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='dg_approved_statistics')
+    approved_at_dg = models.DateTimeField(null=True, blank=True)
+    
     def __str__(self):
-        return f"{self.file.name} uploaded by {self.uploader_name}"
+        return f"Statistic by {self.uploaded_by.username} - {self.status}"
 
 # NEW: Budget models
 class Budget(models.Model):

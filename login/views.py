@@ -14,6 +14,12 @@ from .models import Statistic
 from .serializers import StatisticSerializer
 from .models import Budget, BudgetHistory
 from decimal import Decimal
+from django.http import FileResponse, Http404
+import mimetypes, os
+from django.core.files.storage import default_storage
+from django.conf import settings
+from django.utils.encoding import smart_str
+from django.utils import timezone
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -442,7 +448,7 @@ def pending_plans_for_head(request):
 def review_plan(request, plan_id):
     """Heads review a plan:
        - head_of_division: approve => 'reviewed', reject => 'rejected'
-       - head_of_department: approve => 'approved', reject => 'rejected'
+       - head_of_department: approve => 'reviewed' (forward to DG), reject => 'rejected'
     """
     user = request.user
     allowed_roles = ['head_of_division', 'head_of_department', 'director_general']  # include DG
@@ -461,11 +467,17 @@ def review_plan(request, plan_id):
         else:
             if user_role == 'head_of_division' and not (user.is_staff or user.is_superuser):
                 plan.status = 'reviewed'  # stays reviewed, next HoDepartment
+                plan.approved_by_hod = user
+                plan.approved_at_hod = timezone.now()
             elif user_role == 'head_of_department' and not (user.is_staff or user.is_superuser):
                 plan.status = 'reviewed'  # stays reviewed, next DG
+                plan.approved_by_hod_dept = user
+                plan.approved_at_hod_dept = timezone.now()
             else:
                 # DG or admins finalize approval
                 plan.status = 'approved'
+                plan.approved_by_dg = user
+                plan.approved_at_dg = timezone.now()
         
         plan.reviewed_by = user
         plan.save()
@@ -621,10 +633,16 @@ def review_statistic(request, stat_id):
         else:
             if user_role == 'head_of_division' and not (user.is_staff or user.is_superuser):
                 stat.status = 'reviewed'  # to HoDepartment
+                stat.approved_by_hod = user
+                stat.approved_at_hod = timezone.now()
             elif user_role == 'head_of_department' and not (user.is_staff or user.is_superuser):
                 stat.status = 'reviewed'  # to Director General
+                stat.approved_by_hod_dept = user
+                stat.approved_at_hod_dept = timezone.now()
             else:
                 stat.status = 'approved'  # DG or admins
+                stat.approved_by_dg = user
+                stat.approved_at_dg = timezone.now()
         stat.reviewed_by = user
         stat.save()
 
@@ -820,3 +838,66 @@ def pending_statistics(request):
     except Exception as e:
         print(f"Error in pending_statistics: {str(e)}")
         return Response({'error': f'Error fetching pending statistics: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+# Helper for unified file streaming
+def _stream_model_file(instance, file_attr, label, obj_id):
+    f = getattr(instance, file_attr, None)
+    if not f:
+        return Response({'error': f'{label} file field empty', f'{label}_id': obj_id}, status=status.HTTP_404_NOT_FOUND)
+    rel_name = f.name
+    abs_path = f.path  # Get absolute path from storage
+    if not os.path.exists(abs_path):
+        return Response({
+            'error': 'File not found on disk',
+            'detail': 'The file path does not exist. Check MEDIA_ROOT or re-upload the file.',
+            'relative_name': rel_name,
+            'absolute_path': abs_path,
+            f'{label}_id': obj_id,
+            'action': 'reupload'
+        }, status=status.HTTP_410_GONE)
+    try:
+        fh = open(abs_path, 'rb')  # Open directly for streaming
+    except Exception as e:
+        return Response({
+            'error': f'Error opening file: {str(e)}',
+            'relative_name': rel_name,
+            'absolute_path': abs_path,
+            f'{label}_id': obj_id
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    content_type = mimetypes.guess_type(rel_name)[0] or 'application/octet-stream'
+    resp = FileResponse(fh, content_type=content_type)
+    filename = os.path.basename(rel_name)
+    resp['Content-Disposition'] = f'attachment; filename="{smart_str(filename)}"'
+    resp['X-File-Name'] = smart_str(filename)
+    resp['X-File-Type'] = content_type
+    return resp
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def download_plan(request, plan_id):
+    try:
+        plan = Plan.objects.filter(id=plan_id).first()
+        if not plan:
+            return Response({'error': 'Plan not found', 'plan_id': plan_id}, status=status.HTTP_404_NOT_FOUND)
+        role = getattr(getattr(request.user, 'profile', None), 'role', '')
+        if not (request.user.is_staff or request.user.is_superuser or role in [
+            'planning_officer','head_of_division','head_of_department','director_general','statistics_officer']):
+            return Response({'error': 'Permission denied', 'plan_id': plan_id}, status=status.HTTP_403_FORBIDDEN)
+        return _stream_model_file(plan, 'file', 'plan', plan_id)
+    except Exception as e:
+        return Response({'error': str(e), 'plan_id': plan_id}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def download_statistic(request, stat_id):
+    try:
+        stat = Statistic.objects.filter(id=stat_id).first()
+        if not stat:
+            return Response({'error': 'Statistic not found', 'stat_id': stat_id}, status=status.HTTP_404_NOT_FOUND)
+        role = getattr(getattr(request.user, 'profile', None), 'role', '')
+        if not (request.user.is_staff or request.user.is_superuser or role in [
+            'statistics_officer','head_of_division','head_of_department','director_general','planning_officer']):
+            return Response({'error': 'Permission denied', 'stat_id': stat_id}, status=status.HTTP_403_FORBIDDEN)
+        return _stream_model_file(stat, 'file', 'statistic', stat_id)
+    except Exception as e:
+        return Response({'error': str(e), 'stat_id': stat_id}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
