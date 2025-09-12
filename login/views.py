@@ -819,25 +819,22 @@ def hod_processed_plans(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def pending_statistics(request):
-    """Get all pending statistics for head_of_division and head_of_department approval"""
+    """Get pending statistics for heads and DG based on role"""
     user = request.user
     user_role = getattr(getattr(user, 'profile', None), 'role', '')
-    print(f"User: {user.username}, Role: {user_role}, Is staff: {user.is_staff}, Is superuser: {user.is_superuser}")
-
-    # Temporarily allow all authenticated users to see pending statistics
-    # allowed_roles = ['head_of_division', 'head_of_department', 'director_general']
-    # if not (user.is_staff or user.is_superuser or user_role in allowed_roles):
-    #     return Response({'error': 'Access denied. Only heads and DG can view pending statistics.'}, status=status.HTTP_403_FORBIDDEN)
-
-    try:
-        # For now, show all pending statistics to all authenticated users
+    
+    if user_role == 'head_of_department':
+        # HoDept sees stats approved by HoD (reviewed)
+        stats = Statistic.objects.filter(status='reviewed', reviewed_by__profile__role='head_of_division')
+    elif user_role == 'director_general' or user.is_staff or user.is_superuser:
+        # DG sees stats approved by HoDept (reviewed)
+        stats = Statistic.objects.filter(status='reviewed', reviewed_by__profile__role='head_of_department')
+    else:
+        # HoD sees pending stats
         stats = Statistic.objects.filter(status='pending')
-
-        serializer = StatisticSerializer(stats, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-    except Exception as e:
-        print(f"Error in pending_statistics: {str(e)}")
-        return Response({'error': f'Error fetching pending statistics: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    serializer = StatisticSerializer(stats, many=True)
+    return Response(serializer.data, status=status.HTTP_200_OK)
 
 # Helper for unified file streaming
 def _stream_model_file(instance, file_attr, label, obj_id):
@@ -901,3 +898,22 @@ def download_statistic(request, stat_id):
         return _stream_model_file(stat, 'file', 'statistic', stat_id)
     except Exception as e:
         return Response({'error': str(e), 'stat_id': stat_id}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_pending_statistics(request):
+    user = request.user
+    if user.role == 'head_of_division':
+        # HoD sees stats uploaded by stats officers (pending)
+        statistics = Statistic.objects.filter(status='pending')
+    elif user.role == 'head_of_department':
+        # HoDept sees stats approved by HoD (reviewed)
+        statistics = Statistic.objects.filter(status='reviewed')
+    elif user.role == 'director_general':
+        # DG sees stats approved by HoDept (approved)
+        statistics = Statistic.objects.filter(status='approved')
+    else:
+        statistics = Statistic.objects.none()  # No access for other roles
+    
+    serializer = StatisticSerializer(statistics, many=True)
+    return Response(serializer.data)
