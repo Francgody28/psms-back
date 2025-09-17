@@ -656,7 +656,11 @@ def my_statistics(request):
     """Return all statistics uploaded by the current user"""
     try:
       user = request.user
+      print(f"DEBUG: my_statistics called by user: {user.username} (ID: {user.id})")
+      
       user_role = getattr(getattr(user, 'profile', None), 'role', '')
+      print(f"DEBUG: User role: '{user_role}'")
+      
       allowed_roles = ['statistics_officer', 'head_of_division', 'head_of_department']
       # Allow admins and optionally users without a role (for testing)
       if not (user.is_staff or user.is_superuser or user_role in allowed_roles or user_role == ''):
@@ -664,8 +668,11 @@ def my_statistics(request):
                           status=status.HTTP_403_FORBIDDEN)
 
       stats = Statistic.objects.filter(uploaded_by=user).order_by('-upload_date')
+      print(f"DEBUG: Found {stats.count()} statistics for user {user.username}")
+      
       data = []
       for s in stats:
+          print(f"DEBUG: Processing statistic ID {s.id}, uploaded_by: {s.uploaded_by.username}")
           file_name = s.file.name if s.file else ''
           upload_date = s.upload_date.isoformat() if s.upload_date else ''
           data.append({
@@ -677,8 +684,11 @@ def my_statistics(request):
               'uploader_name': s.uploader_name,
               'reviewed_by': s.reviewed_by.username if s.reviewed_by else None
           })
+      
+      print(f"DEBUG: Returning {len(data)} statistics: {data}")
       return Response(data, status=status.HTTP_200_OK)
     except Exception as e:
+      print(f"DEBUG: Error in my_statistics: {str(e)}")
       return Response({'error': f'Internal server error: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
@@ -822,17 +832,39 @@ def pending_statistics(request):
     """Get pending statistics for heads and DG based on role"""
     user = request.user
     user_role = getattr(getattr(user, 'profile', None), 'role', '')
-    
+
+    print(f"DEBUG: pending_statistics called by user: {user.username} (ID: {user.id}), role: '{user_role}'")
+
     if user_role == 'head_of_department':
         # HoDept sees stats approved by HoD (reviewed)
-        stats = Statistic.objects.filter(status='reviewed', reviewed_by__profile__role='head_of_division')
+        stats = (Statistic.objects
+                 .filter(status='reviewed', reviewed_by__profile__role='head_of_division')
+                 .exclude(file__isnull=True).exclude(file=''))
     elif user_role == 'director_general' or user.is_staff or user.is_superuser:
         # DG sees stats approved by HoDept (reviewed)
-        stats = Statistic.objects.filter(status='reviewed', reviewed_by__profile__role='head_of_department')
-    else:
+        stats = (Statistic.objects
+                 .filter(status='reviewed', reviewed_by__profile__role='head_of_department')
+                 .exclude(file__isnull=True).exclude(file=''))
+    elif user_role == 'head_of_division':
         # HoD sees pending stats
-        stats = Statistic.objects.filter(status='pending')
-    
+        stats = (Statistic.objects
+                 .filter(status='pending')
+                 .exclude(file__isnull=True).exclude(file=''))
+    elif user_role == 'statistics_officer':
+        # Statistics officers should only see their own pending statistics
+        stats = (Statistic.objects
+                 .filter(status='pending', uploaded_by=user)
+                 .exclude(file__isnull=True).exclude(file=''))
+    else:
+        # For testing purposes, allow access to pending stats (you can remove this later)
+        stats = (Statistic.objects
+                 .filter(status='pending')
+                 .exclude(file__isnull=True).exclude(file=''))
+
+    print(f"DEBUG: Found {stats.count()} pending statistics for role '{user_role}'")
+    for s in stats:
+        print(f"DEBUG: Pending stat ID {s.id}, uploaded_by: {s.uploaded_by.username}, status: {s.status}, file: {s.file}")
+
     serializer = StatisticSerializer(stats, many=True)
     return Response(serializer.data, status=status.HTTP_200_OK)
 
